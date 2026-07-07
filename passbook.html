@@ -1,0 +1,1979 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Passbook — Personal Finance</title>
+</head>
+<body style="margin:0;">
+<div id="root">Loading…</div>
+
+<script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+<script>eruda.init();</script>
+
+<script>
+  // Plain JS, no dependencies — this runs no matter what happens with the CDN
+  // scripts or Babel below, so something always shows up instead of a blank page.
+  window.addEventListener("DOMContentLoaded", function () {
+    setTimeout(function () {
+      var root = document.getElementById("root");
+      if (root && root.getAttribute("data-app-mounted") !== "true") {
+        root.innerHTML =
+          '<div style="background:#fdecea;border:2px solid #A9503A;border-radius:8px;padding:20px;margin:20px;font-family:monospace;font-size:13px;color:#611a15;line-height:1.6;">' +
+          "<strong>The app never finished loading.</strong><br><br>" +
+          "This usually means one of the required scripts (React, Babel, or Supabase) failed to load or was blocked — " +
+          "possibly a content blocker or ad blocker in Safari, or a temporary CDN issue.<br><br>" +
+          "Try: Safari settings &rarr; turn off content blockers for this site, then reload. If that doesn't help, try opening this same link in Chrome." +
+          "</div>";
+      }
+    }, 6000);
+  });
+</script>
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" onerror="document.getElementById('root').innerHTML='<div style=\'background:#fdecea;border:2px solid #A9503A;border-radius:8px;padding:20px;margin:20px;font-family:monospace;font-size:13px;color:#611a15;\'>Failed to load React from unpkg.com \u2014 check your internet connection or try a different network/browser.</div>'"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" onerror="document.getElementById('root').innerHTML='<div style=\'background:#fdecea;border:2px solid #A9503A;border-radius:8px;padding:20px;margin:20px;font-family:monospace;font-size:13px;color:#611a15;\'>Failed to load ReactDOM from unpkg.com \u2014 check your internet connection or try a different network/browser.</div>'"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" onerror="document.getElementById('root').innerHTML='<div style=\'background:#fdecea;border:2px solid #A9503A;border-radius:8px;padding:20px;margin:20px;font-family:monospace;font-size:13px;color:#611a15;\'>Failed to load Babel from unpkg.com \u2014 check your internet connection or try a different network/browser.</div>'"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js" onerror="document.getElementById('root').innerHTML='<div style=\'background:#fdecea;border:2px solid #A9503A;border-radius:8px;padding:20px;margin:20px;font-family:monospace;font-size:13px;color:#611a15;\'>Failed to load Supabase from jsdelivr.net \u2014 check your internet connection or try a different network/browser.</div>'"></script>
+
+<script type="text/babel" data-presets="react">
+
+/* ============================================================
+   PASTE YOUR SUPABASE VALUES BELOW, BETWEEN THE QUOTES
+   (Project Settings → API in your Supabase dashboard)
+   ============================================================ */
+const SUPABASE_URL = "https://mqvttqtfkamxkdofcwcv.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1xdnR0cXRma2FteGtkb2Zjd2N2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwMTExNzksImV4cCI6MjA5ODU4NzE3OX0.oxaPpD8hMVB2gQ6roFhBZVr31RKS44kENVu4zsrnhyw";
+/* ============================================================ */
+
+const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// No login, no per-user accounts — this is the simplest possible setup:
+// one shared row in the database, keyed by a fixed string. Fine for personal
+// use behind a private URL, but anyone with your Supabase URL + anon key
+// could technically read/write it (there's no auth wall in front of it).
+const storage = {
+  async get(key) {
+    const { data, error } = await sbClient
+      .from("app_data")
+      .select("value")
+      .eq("key", key)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return { key, value: JSON.stringify(data.value), shared: false };
+  },
+  async set(key, value) {
+    const { error } = await sbClient
+      .from("app_data")
+      .upsert({ key, value: JSON.parse(value), updated_at: new Date().toISOString() }, { onConflict: "key" });
+    if (error) throw error;
+    return { key, value, shared: false };
+  },
+};
+
+const { useState, useEffect, useCallback } = React;
+
+const COLORS = {
+  bg: "#EFEBE0",
+  paper: "#FAF7EE",
+  ink: "#1F3A2E",
+  inkSoft: "#4A5F50",
+  rule: "#C9C0A8",
+  gold: "#B98A2E",
+  rust: "#A9503A",
+  moss: "#5C7A5C",
+  faint: "#8A8570",
+};
+
+const uid = () => Math.random().toString(36).slice(2, 10);
+const norm = (s) => (s || "").trim().toLowerCase();
+const today = () => new Date().toISOString().slice(0, 10);
+const money = (n) =>
+  (n < 0 ? "-$" : "$") +
+  Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pct = (n) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+
+const CHECKING_NAME = "Sofi Checking";
+const SAVINGS_NAME = "Sofi Savings";
+const STORAGE_KEY = "passbook-finance-data";
+
+const defaultData = {
+  weeklyIncome: 900,
+  accounts: [],
+  stocks: [],
+  goals: [],
+  paychecks: [],
+  creditCards: [],
+  debitLog: [],
+  recurringBills: [],
+  polymarketBets: [],
+  polymarketTransactions: [],
+  notes: [],
+};
+
+const DEBIT_CATEGORIES = ["Food", "Things", "Payment to friends", "Other"];
+
+function Field({ label, children }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontFamily: "Inter, sans-serif" }}>
+      <span style={{ fontSize: 11, letterSpacing: "0.06em", textTransform: "uppercase", color: COLORS.faint }}>
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+const inputStyle = {
+  border: `1px solid ${COLORS.rule}`,
+  background: "#fff",
+  borderRadius: 4,
+  padding: "7px 9px",
+  fontFamily: "'JetBrains Mono', monospace",
+  fontSize: 13,
+  color: COLORS.ink,
+  outline: "none",
+};
+
+function IconTrash() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6h12Z" />
+    </svg>
+  );
+}
+
+function RuledSection({ eyebrow, title, right, children }) {
+  return (
+    <div style={{ marginBottom: 40 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          borderBottom: `2px solid ${COLORS.ink}`,
+          paddingBottom: 8,
+          marginBottom: 18,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: COLORS.gold, fontFamily: "Inter, sans-serif", fontWeight: 600 }}>
+            {eyebrow}
+          </div>
+          <div style={{ fontFamily: "'Newsreader', serif", fontStyle: "italic", fontSize: 26, color: COLORS.ink }}>
+            {title}
+          </div>
+        </div>
+        {right}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function AddButton({ onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        border: `1px solid ${COLORS.ink}`,
+        background: COLORS.ink,
+        color: COLORS.paper,
+        borderRadius: 4,
+        padding: "8px 14px",
+        fontFamily: "Inter, sans-serif",
+        fontSize: 12,
+        fontWeight: 600,
+        letterSpacing: "0.02em",
+        cursor: "pointer",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function LedgerRow({ children, onDelete }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "1fr auto",
+        alignItems: "center",
+        gap: 12,
+        padding: "14px 0",
+        borderBottom: `1px solid ${COLORS.rule}`,
+      }}
+    >
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 14 }}>
+        {children}
+      </div>
+      {onDelete && (
+        <button
+          onClick={onDelete}
+          title="Remove"
+          style={{ background: "none", border: "none", color: COLORS.rust, cursor: "pointer", padding: 6, opacity: 0.7 }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = 0.7)}
+        >
+          <IconTrash />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function StatLine({ label, value, sub, subColor, valueColor }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 13 }}>
+      <span style={{ color: COLORS.inkSoft }}>{label}</span>
+      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: valueColor || COLORS.ink }}>
+        {value} {sub && <span style={{ color: subColor, fontWeight: 500, fontSize: 12 }}>({sub})</span>}
+      </span>
+    </div>
+  );
+}
+
+function StatBlock({ label, value, color }) {
+  return (
+    <div>
+      <div style={{ fontSize: 11, letterSpacing: "0.06em", textTransform: "uppercase", color: COLORS.faint, marginBottom: 4 }}>
+        {label}
+      </div>
+      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 20, fontWeight: 600, color: color || COLORS.ink }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ text }) {
+  return (
+    <div style={{ border: `1px dashed ${COLORS.rule}`, borderRadius: 8, padding: "24px 18px", textAlign: "center", color: COLORS.faint, fontSize: 13 }}>
+      {text}
+    </div>
+  );
+}
+
+function PresetButton({ label, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        border: `1px solid ${COLORS.ink}`,
+        background: "transparent",
+        color: COLORS.ink,
+        borderRadius: 20,
+        padding: "6px 14px",
+        fontFamily: "Inter, sans-serif",
+        fontSize: 12,
+        fontWeight: 600,
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function SliderRow({ label, value, onChange, amount, color, readOnly }) {
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
+        <span style={{ fontWeight: 600 }}>{label}</span>
+        <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+          {value.toFixed(0)}% · <span style={{ color }}>{money(amount)}</span>
+        </span>
+      </div>
+      {readOnly ? (
+        <div style={{ height: 8, background: COLORS.rule, borderRadius: 4, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${value}%`, background: color, borderRadius: 4 }} />
+        </div>
+      ) : (
+        <input type="range" min={0} max={100} value={value} onChange={(e) => onChange(Number(e.target.value))} style={{ width: "100%", accentColor: color }} />
+      )}
+    </div>
+  );
+}
+
+function PaycheckForm({ onSubmit }) {
+  const [draft, setDraft] = useState({ date: today(), gross: "", net: "", note: "" });
+  const set = (field, val) => setDraft((d) => ({ ...d, [field]: val }));
+  const submit = () => {
+    if (!draft.net) return;
+    onSubmit(draft);
+    setDraft({ date: today(), gross: "", net: "", note: "" });
+  };
+  return (
+    <div style={{ background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: 16, marginBottom: 24 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 14, marginBottom: 14 }}>
+        <Field label="Date">
+          <input style={inputStyle} type="date" value={draft.date} onChange={(e) => set("date", e.target.value)} />
+        </Field>
+        <Field label="Gross ($)">
+          <input style={inputStyle} type="number" placeholder="0.00" value={draft.gross} onChange={(e) => set("gross", e.target.value)} />
+        </Field>
+        <Field label="Net / take-home ($)">
+          <input style={inputStyle} type="number" placeholder="0.00" value={draft.net} onChange={(e) => set("net", e.target.value)} />
+        </Field>
+        <Field label="Note">
+          <input style={inputStyle} placeholder="optional" value={draft.note} onChange={(e) => set("note", e.target.value)} />
+        </Field>
+      </div>
+      <div style={{ fontSize: 11, color: COLORS.faint, marginBottom: 12 }}>
+        25% will move to {CHECKING_NAME}, 75% to {SAVINGS_NAME} — automatically, the moment you log it.
+      </div>
+      <AddButton onClick={submit}>Log &amp; split paycheck</AddButton>
+    </div>
+  );
+}
+
+function JarFundControl({ onAdd, onWithdraw, available }) {
+  const [amount, setAmount] = useState("");
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+      <Field label={`Move from ${SAVINGS_NAME} ($${available.toFixed(2)} available)`}>
+        <input style={{ ...inputStyle, width: 110 }} type="number" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} />
+      </Field>
+      <button
+        onClick={() => { onAdd(amount); setAmount(""); }}
+        style={{ border: `1px solid ${COLORS.moss}`, background: COLORS.moss, color: "#fff", borderRadius: 4, padding: "8px 12px", fontFamily: "Inter, sans-serif", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+      >
+        Add to jar
+      </button>
+      <button
+        onClick={() => { onWithdraw(amount); setAmount(""); }}
+        style={{ border: `1px solid ${COLORS.rule}`, background: "transparent", color: COLORS.inkSoft, borderRadius: 4, padding: "8px 12px", fontFamily: "Inter, sans-serif", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+      >
+        Return to savings
+      </button>
+    </div>
+  );
+}
+
+function PurchaseForm({ onSubmit }) {
+  const [draft, setDraft] = useState({ description: "", amount: "", date: today() });
+  const set = (field, val) => setDraft((d) => ({ ...d, [field]: val }));
+  const submit = () => {
+    if (!draft.amount) return;
+    onSubmit(draft);
+    setDraft({ description: "", amount: "", date: today() });
+  };
+  return (
+    <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 14 }}>
+      <Field label="Purchase">
+        <input style={{ ...inputStyle, width: 160 }} placeholder="e.g. Gas" value={draft.description} onChange={(e) => set("description", e.target.value)} />
+      </Field>
+      <Field label="Amount ($)">
+        <input style={{ ...inputStyle, width: 100 }} type="number" placeholder="0.00" value={draft.amount} onChange={(e) => set("amount", e.target.value)} />
+      </Field>
+      <Field label="Date">
+        <input style={{ ...inputStyle, width: 140 }} type="date" value={draft.date} onChange={(e) => set("date", e.target.value)} />
+      </Field>
+      <AddButton onClick={submit}>Add purchase</AddButton>
+    </div>
+  );
+}
+
+function PurchaseRow({ purchase, accounts, onMarkPaid, onRemove }) {
+  const [accountId, setAccountId] = useState(accounts[0]?.id || "");
+  if (purchase.paid) {
+    return (
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "8px 0", borderBottom: `1px dashed ${COLORS.rule}`, color: COLORS.faint }}>
+        <span>
+          ✓ {purchase.description || "Purchase"} — {money(Number(purchase.amount) || 0)}
+        </span>
+        <span>paid {purchase.paidDate} from {purchase.paidFromName}</span>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "8px 0", borderBottom: `1px dashed ${COLORS.rule}` }}>
+      <span style={{ fontSize: 13 }}>
+        {purchase.description || "Purchase"} · <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{money(Number(purchase.amount) || 0)}</span>{" "}
+        <span style={{ color: COLORS.faint, fontSize: 11 }}>({purchase.date})</span>
+      </span>
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        {accounts.length > 0 ? (
+          <>
+            <select value={accountId} onChange={(e) => setAccountId(e.target.value)} style={{ ...inputStyle, padding: "6px 8px", fontSize: 12 }}>
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.name || "Unnamed account"}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => onMarkPaid(accountId)}
+              style={{ border: `1px solid ${COLORS.moss}`, background: COLORS.moss, color: "#fff", borderRadius: 4, padding: "6px 10px", fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 600, cursor: "pointer" }}
+            >
+              Mark paid
+            </button>
+          </>
+        ) : (
+          <span style={{ fontSize: 11, color: COLORS.faint }}>Add a bank account first</span>
+        )}
+        <button onClick={onRemove} style={{ background: "none", border: "none", color: COLORS.rust, cursor: "pointer", opacity: 0.7 }}>
+          <IconTrash />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RecurringBillForm({ onSubmit, creditCards }) {
+  const [draft, setDraft] = useState({ name: "", amount: "", day: "1", destination: "debit", cardId: "", category: DEBIT_CATEGORIES[0] });
+  const set = (field, val) => setDraft((d) => ({ ...d, [field]: val }));
+  const submit = () => {
+    if (!draft.name || !draft.amount || !draft.day) return;
+    if (draft.destination === "credit" && !draft.cardId) return;
+    onSubmit(draft);
+    setDraft({ name: "", amount: "", day: draft.day, destination: draft.destination, cardId: draft.cardId, category: draft.category });
+  };
+  return (
+    <div style={{ background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: 16, marginBottom: 22 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 12 }}>Add a recurring bill</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 14, marginBottom: 14 }}>
+        <Field label="Bill name">
+          <input style={inputStyle} placeholder="e.g. Netflix" value={draft.name} onChange={(e) => set("name", e.target.value)} />
+        </Field>
+        <Field label="Amount ($)">
+          <input style={inputStyle} type="number" placeholder="0.00" value={draft.amount} onChange={(e) => set("amount", e.target.value)} />
+        </Field>
+        <Field label="Day of month">
+          <input style={inputStyle} type="number" min="1" max="28" value={draft.day} onChange={(e) => set("day", e.target.value)} />
+        </Field>
+        <Field label="Charge to">
+          <select style={{ ...inputStyle, padding: "7px 8px" }} value={draft.destination} onChange={(e) => set("destination", e.target.value)}>
+            <option value="debit">Debit ({CHECKING_NAME})</option>
+            <option value="credit">Credit card</option>
+          </select>
+        </Field>
+        {draft.destination === "credit" ? (
+          <Field label="Which card">
+            <select style={{ ...inputStyle, padding: "7px 8px" }} value={draft.cardId} onChange={(e) => set("cardId", e.target.value)}>
+              <option value="">Select a card…</option>
+              {creditCards.map((c) => (
+                <option key={c.id} value={c.id}>{c.name || "Unnamed card"}</option>
+              ))}
+            </select>
+          </Field>
+        ) : (
+          <Field label="Category">
+            <select style={{ ...inputStyle, padding: "7px 8px" }} value={draft.category} onChange={(e) => set("category", e.target.value)}>
+              {DEBIT_CATEGORIES.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </Field>
+        )}
+      </div>
+      <div style={{ fontSize: 11, color: COLORS.faint, marginBottom: 12 }}>
+        Charges automatically once a month on that day, next time you have the app open on or after it.
+      </div>
+      <AddButton onClick={submit}>Save recurring bill</AddButton>
+    </div>
+  );
+}
+
+function DebitForm({ onSubmit }) {
+  const [draft, setDraft] = useState({ date: today(), description: "", category: DEBIT_CATEGORIES[0], amount: "" });
+  const set = (field, val) => setDraft((d) => ({ ...d, [field]: val }));
+  const submit = () => {
+    if (!draft.amount) return;
+    onSubmit(draft);
+    setDraft({ date: today(), description: "", category: DEBIT_CATEGORIES[0], amount: "" });
+  };
+  return (
+    <div style={{ background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: 16, marginBottom: 22 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 14, marginBottom: 14 }}>
+        <Field label="Date">
+          <input style={inputStyle} type="date" value={draft.date} onChange={(e) => set("date", e.target.value)} />
+        </Field>
+        <Field label="What for">
+          <input style={inputStyle} placeholder="e.g. Chipotle" value={draft.description} onChange={(e) => set("description", e.target.value)} />
+        </Field>
+        <Field label="Category">
+          <select style={{ ...inputStyle, padding: "7px 8px" }} value={draft.category} onChange={(e) => set("category", e.target.value)}>
+            {DEBIT_CATEGORIES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Amount ($)">
+          <input style={inputStyle} type="number" placeholder="0.00" value={draft.amount} onChange={(e) => set("amount", e.target.value)} />
+        </Field>
+      </div>
+      <AddButton onClick={submit}>Log debit payment</AddButton>
+    </div>
+  );
+}
+
+const SPORT_CATEGORIES = ["NBA", "NFL", "MLB", "NHL", "NCAAF", "NCAAB", "Soccer", "MMA/Boxing", "Tennis", "Golf", "Politics", "Crypto", "Entertainment", "Esports", "Other"];
+
+function BetForm({ onSubmit }) {
+  const [draft, setDraft] = useState({ date: today(), sport: SPORT_CATEGORIES[0], market: "", outcome: "", amountWagered: "", buyPercent: "" });
+  const set = (field, val) => setDraft((d) => ({ ...d, [field]: val }));
+  const submit = () => {
+    if (!draft.market || !draft.amountWagered || !draft.buyPercent) return;
+    onSubmit(draft);
+    setDraft({ date: today(), sport: draft.sport, market: "", outcome: "", amountWagered: "", buyPercent: "" });
+  };
+  return (
+    <div style={{ background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: 16, marginBottom: 22 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 14, marginBottom: 14 }}>
+        <Field label="Sport / category">
+          <select style={{ ...inputStyle, padding: "7px 8px" }} value={draft.sport} onChange={(e) => set("sport", e.target.value)}>
+            {SPORT_CATEGORIES.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Market">
+          <input style={inputStyle} placeholder="e.g. Will X happen?" value={draft.market} onChange={(e) => set("market", e.target.value)} />
+        </Field>
+        <Field label="Position / outcome">
+          <input style={inputStyle} placeholder="e.g. Yes" value={draft.outcome} onChange={(e) => set("outcome", e.target.value)} />
+        </Field>
+        <Field label="Bought at (%)">
+          <input style={inputStyle} type="number" min="0" max="100" placeholder="e.g. 63" value={draft.buyPercent} onChange={(e) => set("buyPercent", e.target.value)} />
+        </Field>
+        <Field label="Amount wagered ($)">
+          <input style={inputStyle} type="number" placeholder="0.00" value={draft.amountWagered} onChange={(e) => set("amountWagered", e.target.value)} />
+        </Field>
+        <Field label="Date">
+          <input style={inputStyle} type="date" value={draft.date} onChange={(e) => set("date", e.target.value)} />
+        </Field>
+      </div>
+      <div style={{ fontSize: 11, color: COLORS.faint, marginBottom: 12 }}>
+        Leave it here once placed — come back and fill in "Closed at %" on the bet once you sell or it resolves, and the value updates itself. If Polymarket's fee makes the actual payout different, you can override it there too.
+      </div>
+      <AddButton onClick={submit}>Log bet</AddButton>
+    </div>
+  );
+}
+
+function NoteForm({ onSubmit }) {
+  const [draft, setDraft] = useState({ date: today(), content: "" });
+  const set = (field, val) => setDraft((d) => ({ ...d, [field]: val }));
+  const submit = () => {
+    if (!draft.content.trim()) return;
+    onSubmit(draft);
+    setDraft({ date: today(), content: "" });
+  };
+  return (
+    <div style={{ background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: 16, marginBottom: 22 }}>
+      <div style={{ display: "flex", gap: 14, marginBottom: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <Field label="Date">
+          <input style={inputStyle} type="date" value={draft.date} onChange={(e) => set("date", e.target.value)} />
+        </Field>
+      </div>
+      <textarea
+        value={draft.content}
+        onChange={(e) => set("content", e.target.value)}
+        placeholder="Write a note…"
+        rows={3}
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          border: `1px solid ${COLORS.rule}`,
+          background: "#fff",
+          borderRadius: 4,
+          padding: "8px 10px",
+          fontFamily: "Inter, sans-serif",
+          fontSize: 13,
+          color: COLORS.ink,
+          resize: "vertical",
+          marginBottom: 12,
+        }}
+      />
+      <AddButton onClick={submit}>Save note</AddButton>
+    </div>
+  );
+}
+
+function TransactionForm({ onSubmit }) {
+  const [draft, setDraft] = useState({ type: "deposit", amount: "", date: today() });
+  const set = (field, val) => setDraft((d) => ({ ...d, [field]: val }));
+  const submit = () => {
+    if (!draft.amount) return;
+    onSubmit(draft);
+    setDraft({ type: draft.type, amount: "", date: today() });
+  };
+  return (
+    <div style={{ background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: 16, marginBottom: 22 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 12 }}>Fund your Polymarket balance</div>
+      <div style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <Field label="Type">
+          <select style={{ ...inputStyle, padding: "7px 8px" }} value={draft.type} onChange={(e) => set("type", e.target.value)}>
+            <option value="deposit">Deposit</option>
+            <option value="withdraw">Withdraw</option>
+          </select>
+        </Field>
+        <Field label="Amount ($)">
+          <input style={{ ...inputStyle, width: 120 }} type="number" placeholder="0.00" value={draft.amount} onChange={(e) => set("amount", e.target.value)} />
+        </Field>
+        <Field label="Date">
+          <input style={inputStyle} type="date" value={draft.date} onChange={(e) => set("date", e.target.value)} />
+        </Field>
+        <AddButton onClick={submit}>{draft.type === "deposit" ? "Add deposit" : "Log withdrawal"}</AddButton>
+      </div>
+    </div>
+  );
+}
+
+function SimplePieChart({ data, size = 200 }) {
+  const total = data.reduce((s, d) => s + d.value, 0);
+  if (total <= 0) return null;
+  const cx = size / 2, cy = size / 2, rOuter = size * 0.42, rInner = size * 0.26;
+  let angle = -90;
+  const slices = data.map((d) => {
+    const frac = d.value / total;
+    const startAngle = angle;
+    const sweep = frac * 360;
+    angle += sweep;
+    const endAngle = angle;
+    const toXY = (r, deg) => {
+      const rad = (deg * Math.PI) / 180;
+      return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)];
+    };
+    const [x1, y1] = toXY(rOuter, startAngle);
+    const [x2, y2] = toXY(rOuter, endAngle);
+    const [x3, y3] = toXY(rInner, endAngle);
+    const [x4, y4] = toXY(rInner, startAngle);
+    const largeArc = sweep > 180 ? 1 : 0;
+    const path = `M ${x1} ${y1} A ${rOuter} ${rOuter} 0 ${largeArc} 1 ${x2} ${y2} L ${x3} ${y3} A ${rInner} ${rInner} 0 ${largeArc} 0 ${x4} ${y4} Z`;
+    return { ...d, path, pct: frac * 100 };
+  });
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      {slices.map((s, i) => (
+        <path key={i} d={s.path} fill={s.color} stroke={COLORS.paper} strokeWidth={2}>
+          <title>{`${s.name}: ${money(s.value)} (${s.pct.toFixed(0)}%)`}</title>
+        </path>
+      ))}
+    </svg>
+  );
+}
+
+function SimpleBarChart({ data, valueKey, labelKey, height = 160, colorFn, tooltipFn }) {
+  const values = data.map((d) => Number(d[valueKey]) || 0);
+  const maxAbs = Math.max(1, ...values.map((v) => Math.abs(v)));
+  const hasNegative = values.some((v) => v < 0);
+  const zeroY = hasNegative ? height / 2 : height - 20;
+  const usableHeight = hasNegative ? height / 2 - 10 : height - 40;
+  const barWidth = Math.max(6, Math.min(36, (100 / Math.max(data.length, 1)) * 3));
+
+  return (
+    <div style={{ width: "100%", overflowX: data.length > 14 ? "auto" : "visible" }}>
+      <svg width="100%" height={height} viewBox={`0 0 ${Math.max(data.length * (barWidth + 14), 300)} ${height}`} preserveAspectRatio="none">
+        <line x1="0" y1={zeroY} x2={Math.max(data.length * (barWidth + 14), 300)} y2={zeroY} stroke={COLORS.rule} strokeWidth="1" />
+        {data.map((d, i) => {
+          const v = Number(d[valueKey]) || 0;
+          const barH = (Math.abs(v) / maxAbs) * usableHeight;
+          const x = i * (barWidth + 14) + 10;
+          const y = v >= 0 ? zeroY - barH : zeroY;
+          const fill = colorFn ? colorFn(d) : COLORS.moss;
+          return (
+            <g key={i}>
+              <rect x={x} y={y} width={barWidth} height={Math.max(barH, 1)} fill={fill} rx="3">
+                <title>{tooltipFn ? tooltipFn(d) : `${d[labelKey]}: ${money(v)}`}</title>
+              </rect>
+              <text x={x + barWidth / 2} y={height - 4} textAnchor="middle" fontSize="9" fill={COLORS.faint} fontFamily="Inter, sans-serif">
+                {(d[labelKey] || "").slice(5)}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+const SOCCER_LEAGUES = [
+  { id: "eng.1", label: "Premier League" },
+  { id: "esp.1", label: "La Liga" },
+  { id: "ger.1", label: "Bundesliga" },
+  { id: "ita.1", label: "Serie A" },
+  { id: "fra.1", label: "Ligue 1" },
+  { id: "usa.1", label: "MLS" },
+  { id: "uefa.champions", label: "Champions League" },
+  { id: "uefa.europa", label: "Europa League" },
+  { id: "fifa.world", label: "World Cup" },
+];
+
+function todayCompact() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}${m}${day}`;
+}
+
+function SoccerScores() {
+  const [league, setLeague] = useState(SOCCER_LEAGUES[0].id);
+  const leagueLabel = SOCCER_LEAGUES.find((l) => l.id === league)?.label;
+  const espnUrl = `https://www.espn.com/soccer/scoreboard/_/date/${todayCompact()}/league/${league}`;
+
+  return (
+    <RuledSection
+      eyebrow="Today's fixtures"
+      title="Soccer Today"
+      right={
+        <select value={league} onChange={(e) => setLeague(e.target.value)} style={{ ...inputStyle, padding: "7px 8px" }}>
+          {SOCCER_LEAGUES.map((l) => (
+            <option key={l.id} value={l.id}>{l.label}</option>
+          ))}
+        </select>
+      }
+    >
+      <div style={{ background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: 20, textAlign: "center" }}>
+        <div style={{ fontSize: 13, color: COLORS.inkSoft, marginBottom: 14, lineHeight: 1.6 }}>
+          This page can't pull live scores directly into the app — Claude artifacts can't make calls out to outside
+          websites or APIs. Tap below to see today's {leagueLabel} matches and live scores on ESPN.
+        </div>
+        <a
+          href={espnUrl}
+          target="_blank"
+          rel="noreferrer"
+          style={{
+            display: "inline-block",
+            background: COLORS.ink,
+            color: COLORS.paper,
+            borderRadius: 4,
+            padding: "10px 18px",
+            fontFamily: "Inter, sans-serif",
+            fontSize: 13,
+            fontWeight: 600,
+            textDecoration: "none",
+          }}
+        >
+          Open today's {leagueLabel} scores on ESPN →
+        </a>
+      </div>
+    </RuledSection>
+  );
+}
+
+function FinanceTracker() {
+  const [data, setData] = useState(defaultData);
+  const [loaded, setLoaded] = useState(false);
+  const [tab, setTab] = useState("overview");
+  const [saveState, setSaveState] = useState("idle");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await storage.get(STORAGE_KEY);
+        if (res && res.value) {
+          setData({ ...defaultData, ...JSON.parse(res.value) });
+        }
+      } catch (e) {
+        // no existing data yet
+      } finally {
+        setLoaded(true);
+      }
+    })();
+  }, []);
+
+  const persist = useCallback(async (next) => {
+    setSaveState("saving");
+    try {
+      await storage.set(STORAGE_KEY, JSON.stringify(next));
+      setSaveState("saved");
+      setTimeout(() => setSaveState("idle"), 1200);
+    } catch (e) {
+      setSaveState("error");
+    }
+  }, []);
+
+  const update = (fn) => {
+    setData((prev) => {
+      const next = fn(prev);
+      persist(next);
+      return next;
+    });
+  };
+
+  // Charge any recurring bills that are due — runs once data has loaded.
+  useEffect(() => {
+    if (!loaded) return;
+    const now = new Date();
+    const monthKey = now.toISOString().slice(0, 7);
+    const todayDay = now.getDate();
+
+    setData((prev) => {
+      const due = prev.recurringBills.filter((b) => b.lastCharged !== monthKey && todayDay >= (Number(b.day) || 1));
+      if (due.length === 0) return prev;
+
+      let accounts = [...prev.accounts];
+      let creditCards = [...prev.creditCards];
+      let debitLog = [...prev.debitLog];
+      const chargedIds = [];
+
+      due.forEach((bill) => {
+        const amt = Number(bill.amount) || 0;
+        if (bill.destination === "credit") {
+          creditCards = creditCards.map((c) =>
+            c.id === bill.cardId
+              ? { ...c, purchases: [...(c.purchases || []), { id: uid(), description: bill.name, amount: amt, date: today(), paid: false }] }
+              : c
+          );
+        } else {
+          let idx = accounts.findIndex((a) => norm(a.name) === norm(CHECKING_NAME));
+          if (idx === -1) {
+            accounts.push({ id: uid(), name: CHECKING_NAME, balance: 0, apy: "" });
+            idx = accounts.length - 1;
+          }
+          accounts[idx] = { ...accounts[idx], balance: (Number(accounts[idx].balance) || 0) - amt };
+          debitLog = [...debitLog, { id: uid(), date: today(), description: bill.name, category: bill.category || "Other", amount: amt }];
+        }
+        chargedIds.push(bill.id);
+      });
+
+      const recurringBills = prev.recurringBills.map((b) => (chargedIds.includes(b.id) ? { ...b, lastCharged: monthKey } : b));
+      const next = { ...prev, accounts, creditCards, debitLog, recurringBills };
+      persist(next);
+      return next;
+    });
+  }, [loaded]);
+
+  if (!loaded) {
+    return <div style={{ padding: 40, fontFamily: "Inter, sans-serif", color: COLORS.inkSoft }}>Opening your ledger…</div>;
+  }
+
+  // ---- derived numbers ----
+  const totalBank = data.accounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
+  const weightedApy =
+    totalBank > 0
+      ? data.accounts.reduce((s, a) => s + (Number(a.balance) || 0) * (Number(a.apy) || 0), 0) / totalBank
+      : 0;
+  const projectedAnnualInterest = data.accounts.reduce((s, a) => s + (Number(a.balance) || 0) * ((Number(a.apy) || 0) / 100), 0);
+
+  const stockRows = data.stocks.map((s) => {
+    const shares = Number(s.shares) || 0;
+    const avgCost = Number(s.avgCost) || 0;
+    const price = Number(s.currentPrice) || 0;
+    const value = shares * price;
+    const cost = shares * avgCost;
+    const gain = value - cost;
+    const gainPct = cost > 0 ? (gain / cost) * 100 : 0;
+    return { ...s, value, cost, gain, gainPct };
+  });
+  const totalStockValue = stockRows.reduce((s, r) => s + r.value, 0);
+  const totalStockCost = stockRows.reduce((s, r) => s + r.cost, 0);
+  const totalStockGain = totalStockValue - totalStockCost;
+  const totalStockGainPct = totalStockCost > 0 ? (totalStockGain / totalStockCost) * 100 : 0;
+
+  const totalGoalsSaved = data.goals.reduce((s, g) => s + (Number(g.savedAmount) || 0), 0);
+  const totalGoalsTarget = data.goals.reduce((s, g) => s + (Number(g.targetAmount) || 0), 0);
+
+  const savingsAccount = data.accounts.find((a) => norm(a.name) === norm(SAVINGS_NAME));
+  const savingsAvailable = savingsAccount ? Number(savingsAccount.balance) || 0 : 0;
+  const checkingAccount = data.accounts.find((a) => norm(a.name) === norm(CHECKING_NAME));
+  const checkingBalance = checkingAccount ? Number(checkingAccount.balance) || 0 : 0;
+
+  const debitSorted = [...data.debitLog].sort((a, b) => new Date(b.date) - new Date(a.date));
+  const totalDebitSpend = data.debitLog.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  const debitByCategory = DEBIT_CATEGORIES.map((cat) => ({
+    category: cat,
+    total: data.debitLog.filter((d) => d.category === cat).reduce((s, d) => s + (Number(d.amount) || 0), 0),
+  })).filter((c) => c.total > 0);
+
+  const betRows = data.polymarketBets.map((b) => {
+    const wagered = Number(b.amountWagered) || 0;
+    const buyPct = Number(b.buyPercent) || 0;
+    const closePct = b.closePercent !== "" && b.closePercent != null ? Number(b.closePercent) : null;
+    const shares = buyPct > 0 ? wagered / (buyPct / 100) : 0;
+    const isClosed = closePct !== null && !Number.isNaN(closePct);
+    const hasOverride = b.actualPayout !== "" && b.actualPayout != null && !Number.isNaN(Number(b.actualPayout));
+    const calculatedValue = isClosed ? shares * (closePct / 100) : wagered;
+    const value = isClosed ? (hasOverride ? Number(b.actualPayout) : calculatedValue) : wagered;
+    const pnl = isClosed ? value - wagered : 0;
+    const outcomeLabel = !isClosed ? "Open" : closePct >= 99.5 ? "Won" : closePct <= 0.5 ? "Lost" : "Sold early";
+    return { ...b, wagered, buyPct, closePct, shares, isClosed, hasOverride, calculatedValue, value, pnl, outcomeLabel };
+  });
+  const totalWagered = betRows.reduce((s, b) => s + b.wagered, 0);
+  const totalPayoutReceived = betRows.filter((b) => b.isClosed).reduce((s, b) => s + b.value, 0);
+  // "Current value" is a running cash balance: every wager subtracts immediately when placed,
+  // and only adds back once that bet actually closes and pays out.
+  const totalBetValue = totalPayoutReceived - totalWagered;
+  const totalBetPnl = betRows.reduce((s, b) => s + b.pnl, 0);
+
+  const totalDeposits = data.polymarketTransactions.filter((t) => t.type === "deposit").reduce((s, t) => s + (Number(t.amount) || 0), 0);
+  const totalWithdrawals = data.polymarketTransactions.filter((t) => t.type === "withdraw").reduce((s, t) => s + (Number(t.amount) || 0), 0);
+  const availableToBet = totalDeposits - totalWithdrawals + totalBetValue;
+  const dailyTxnMap = {};
+  data.polymarketTransactions.forEach((t) => {
+    const key = t.date || "unknown";
+    const amt = (Number(t.amount) || 0) * (t.type === "withdraw" ? -1 : 1);
+    if (!dailyTxnMap[key]) dailyTxnMap[key] = { date: key, net: 0 };
+    dailyTxnMap[key].net += amt;
+  });
+  const dailyTxnData = Object.values(dailyTxnMap).sort((a, b) => new Date(a.date) - new Date(b.date));
+  const openBets = betRows.filter((b) => !b.isClosed);
+  const settledBets = betRows.filter((b) => b.isClosed);
+  const dailyBetMap = {};
+  settledBets.forEach((b) => {
+    const key = b.date || "unknown";
+    if (!dailyBetMap[key]) dailyBetMap[key] = { date: key, pnl: 0, bets: [] };
+    dailyBetMap[key].pnl += b.pnl;
+    dailyBetMap[key].bets.push({ market: b.market || "Untitled", pnl: b.pnl });
+  });
+  const dailyBetData = Object.values(dailyBetMap).sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  const sportBreakdown = Object.values(
+    betRows.reduce((acc, b) => {
+      const key = b.sport || "Other";
+      if (!acc[key]) acc[key] = { sport: key, count: 0, wagered: 0 };
+      acc[key].count += 1;
+      acc[key].wagered += b.wagered;
+      return acc;
+    }, {})
+  ).sort((a, b) => b.count - a.count);
+
+  const PERCENT_BUCKETS = ["0-19%", "20-39%", "40-59%", "60-79%", "80-100%"];
+  const bucketFor = (pct) => {
+    if (pct < 20) return PERCENT_BUCKETS[0];
+    if (pct < 40) return PERCENT_BUCKETS[1];
+    if (pct < 60) return PERCENT_BUCKETS[2];
+    if (pct < 80) return PERCENT_BUCKETS[3];
+    return PERCENT_BUCKETS[4];
+  };
+  const percentBreakdown = PERCENT_BUCKETS.map((bucket) => ({
+    bucket,
+    count: betRows.filter((b) => b.buyPct > 0 && bucketFor(b.buyPct) === bucket).length,
+    wagered: betRows.filter((b) => b.buyPct > 0 && bucketFor(b.buyPct) === bucket).reduce((s, b) => s + b.wagered, 0),
+  })).filter((b) => b.count > 0);
+  const maxSportCount = Math.max(1, ...sportBreakdown.map((s) => s.count));
+  const maxBucketCount = Math.max(1, ...percentBreakdown.map((b) => b.count));
+
+  const paychecksSorted = [...data.paychecks].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const totalNetPay = data.paychecks.reduce((s, p) => s + (Number(p.net) || 0), 0);
+  const avgNetPay = data.paychecks.length > 0 ? totalNetPay / data.paychecks.length : 0;
+  const avgWithholdPct =
+    data.paychecks.length > 0
+      ? data.paychecks.reduce((s, p) => {
+          const g = Number(p.gross) || 0;
+          const n = Number(p.net) || 0;
+          return s + (g > 0 ? (1 - n / g) * 100 : 0);
+        }, 0) / data.paychecks.length
+      : 0;
+  const lastPaycheck = paychecksSorted[paychecksSorted.length - 1];
+
+  const ccRows = data.creditCards.map((c) => {
+    const purchases = c.purchases || [];
+    const balance = purchases.filter((p) => !p.paid).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const limit = Number(c.limit) || 0;
+    const util = limit > 0 ? (balance / limit) * 100 : 0;
+    return { ...c, purchases, balance, limit, util };
+  });
+  const totalCCDebt = ccRows.reduce((s, c) => s + c.balance, 0);
+  const totalCCLimit = ccRows.reduce((s, c) => s + c.limit, 0);
+  const totalCCMinPayment = ccRows.reduce((s, c) => s + (Number(c.minPayment) || 0), 0);
+  const overallUtil = totalCCLimit > 0 ? (totalCCDebt / totalCCLimit) * 100 : 0;
+  const weightedCCApr = totalCCDebt > 0 ? ccRows.reduce((s, c) => s + c.balance * (Number(c.apr) || 0), 0) / totalCCDebt : 0;
+  const highestAprCard = ccRows.length ? ccRows.reduce((a, b) => ((Number(a.apr) || 0) >= (Number(b.apr) || 0) ? a : b)) : null;
+
+  const paidRecords = [
+    ...data.creditCards.flatMap((c) => (c.purchases || []).filter((p) => p.paid).map((p) => ({ ...p, type: "credit", cardName: c.name || "Unnamed card", sortDate: p.paidDate }))),
+    ...data.debitLog.map((d) => ({ ...d, type: "debit", sortDate: d.date })),
+  ].sort((a, b) => new Date(b.sortDate || 0) - new Date(a.sortDate || 0));
+  const totalPaid = paidRecords.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const totalPaidCredit = paidRecords.filter((p) => p.type === "credit").reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const totalPaidDebit = paidRecords.filter((p) => p.type === "debit").reduce((s, p) => s + (Number(p.amount) || 0), 0);
+
+  const netWorth = totalBank + totalStockValue + totalGoalsSaved + totalBetValue - totalCCDebt;
+
+  const pieData = [
+    { name: "Bank (free)", value: Math.max(totalBank, 0), color: COLORS.moss },
+    { name: "Savings jars", value: Math.max(totalGoalsSaved, 0), color: COLORS.gold },
+    { name: "Investments", value: Math.max(totalStockValue, 0), color: COLORS.rust },
+    { name: "Polymarket", value: Math.max(totalBetValue, 0), color: "#6B5B95" },
+  ].filter((d) => d.value > 0);
+
+  // ---- handlers ----
+  const addAccount = () => update((d) => ({ ...d, accounts: [...d.accounts, { id: uid(), name: "", balance: "", apy: "" }] }));
+  const updateAccount = (id, field, val) => update((d) => ({ ...d, accounts: d.accounts.map((a) => (a.id === id ? { ...a, [field]: val } : a)) }));
+  const removeAccount = (id) => update((d) => ({ ...d, accounts: d.accounts.filter((a) => a.id !== id) }));
+
+  const addStock = () => update((d) => ({ ...d, stocks: [...d.stocks, { id: uid(), ticker: "", shares: "", avgCost: "", currentPrice: "" }] }));
+  const updateStock = (id, field, val) => update((d) => ({ ...d, stocks: d.stocks.map((s) => (s.id === id ? { ...s, [field]: val } : s)) }));
+  const removeStock = (id) => update((d) => ({ ...d, stocks: d.stocks.filter((s) => s.id !== id) }));
+
+  const addGoal = () => update((d) => ({ ...d, goals: [...d.goals, { id: uid(), name: "", targetAmount: "", savedAmount: "" }] }));
+  const updateGoal = (id, field, val) => update((d) => ({ ...d, goals: d.goals.map((g) => (g.id === id ? { ...g, [field]: val } : g)) }));
+  const removeGoal = (id) => update((d) => ({ ...d, goals: d.goals.filter((g) => g.id !== id) }));
+
+  const addToJar = (goalId, amount) => {
+    const amt = Number(amount) || 0;
+    if (amt <= 0) return;
+    update((d) => {
+      const sIdx = d.accounts.findIndex((a) => norm(a.name) === norm(SAVINGS_NAME));
+      if (sIdx === -1) return d;
+      const available = Number(d.accounts[sIdx].balance) || 0;
+      const transfer = Math.min(amt, available);
+      if (transfer <= 0) return d;
+      const accounts = d.accounts.map((a, i) => (i === sIdx ? { ...a, balance: (Number(a.balance) || 0) - transfer } : a));
+      const goals = d.goals.map((g) => (g.id === goalId ? { ...g, savedAmount: (Number(g.savedAmount) || 0) + transfer } : g));
+      return { ...d, accounts, goals };
+    });
+  };
+  const withdrawFromJar = (goalId, amount) => {
+    const amt = Number(amount) || 0;
+    if (amt <= 0) return;
+    update((d) => {
+      const goal = d.goals.find((g) => g.id === goalId);
+      if (!goal) return d;
+      const available = Number(goal.savedAmount) || 0;
+      const transfer = Math.min(amt, available);
+      if (transfer <= 0) return d;
+      let accounts = [...d.accounts];
+      let sIdx = accounts.findIndex((a) => norm(a.name) === norm(SAVINGS_NAME));
+      if (sIdx === -1) {
+        accounts.push({ id: uid(), name: SAVINGS_NAME, balance: 0, apy: "" });
+        sIdx = accounts.length - 1;
+      }
+      accounts[sIdx] = { ...accounts[sIdx], balance: (Number(accounts[sIdx].balance) || 0) + transfer };
+      const goals = d.goals.map((g) => (g.id === goalId ? { ...g, savedAmount: (Number(g.savedAmount) || 0) - transfer } : g));
+      return { ...d, accounts, goals };
+    });
+  };
+
+  const splitPaycheck = (draft) => {
+    const net = Number(draft.net) || 0;
+    const checkingAmt = Math.round(net * 0.25 * 100) / 100;
+    const savingsAmt = Math.round((net - checkingAmt) * 100) / 100;
+    update((d) => {
+      let accounts = [...d.accounts];
+      const findOrCreate = (name) => {
+        let idx = accounts.findIndex((a) => norm(a.name) === norm(name));
+        if (idx === -1) {
+          accounts.push({ id: uid(), name, balance: 0, apy: "" });
+          idx = accounts.length - 1;
+        }
+        return idx;
+      };
+      const ci = findOrCreate(CHECKING_NAME);
+      const si = findOrCreate(SAVINGS_NAME);
+      accounts[ci] = { ...accounts[ci], balance: (Number(accounts[ci].balance) || 0) + checkingAmt };
+      accounts[si] = { ...accounts[si], balance: (Number(accounts[si].balance) || 0) + savingsAmt };
+      const paychecks = [...d.paychecks, { ...draft, id: uid(), splitChecking: checkingAmt, splitSavings: savingsAmt }];
+      return { ...d, accounts, paychecks };
+    });
+  };
+  const removePaycheck = (id) => {
+    update((d) => {
+      const p = d.paychecks.find((x) => x.id === id);
+      let accounts = d.accounts;
+      if (p) {
+        accounts = accounts.map((a) => {
+          if (norm(a.name) === norm(CHECKING_NAME) && p.splitChecking) return { ...a, balance: (Number(a.balance) || 0) - p.splitChecking };
+          if (norm(a.name) === norm(SAVINGS_NAME) && p.splitSavings) return { ...a, balance: (Number(a.balance) || 0) - p.splitSavings };
+          return a;
+        });
+      }
+      return { ...d, accounts, paychecks: d.paychecks.filter((x) => x.id !== id) };
+    });
+  };
+
+  const addCard = () => update((d) => ({ ...d, creditCards: [...d.creditCards, { id: uid(), name: "", limit: "", apr: "", minPayment: "", purchases: [] }] }));
+  const updateCard = (id, field, val) => update((d) => ({ ...d, creditCards: d.creditCards.map((c) => (c.id === id ? { ...c, [field]: val } : c)) }));
+  const removeCard = (id) => update((d) => ({ ...d, creditCards: d.creditCards.filter((c) => c.id !== id) }));
+
+  const addPurchase = (cardId, purchase) =>
+    update((d) => ({
+      ...d,
+      creditCards: d.creditCards.map((c) => (c.id === cardId ? { ...c, purchases: [...(c.purchases || []), { id: uid(), ...purchase, paid: false }] } : c)),
+    }));
+  const removePurchase = (cardId, purchaseId) =>
+    update((d) => ({
+      ...d,
+      creditCards: d.creditCards.map((c) => (c.id === cardId ? { ...c, purchases: (c.purchases || []).filter((p) => p.id !== purchaseId) } : c)),
+    }));
+  const markPurchasePaid = (cardId, purchaseId, accountId) => {
+    update((d) => {
+      const card = d.creditCards.find((c) => c.id === cardId);
+      const purchase = card?.purchases.find((p) => p.id === purchaseId);
+      if (!purchase) return d;
+      const amt = Number(purchase.amount) || 0;
+      const account = d.accounts.find((a) => a.id === accountId);
+      const accounts = d.accounts.map((a) => (a.id === accountId ? { ...a, balance: (Number(a.balance) || 0) - amt } : a));
+      const creditCards = d.creditCards.map((c) =>
+        c.id === cardId
+          ? {
+              ...c,
+              purchases: c.purchases.map((p) =>
+                p.id === purchaseId ? { ...p, paid: true, paidFrom: accountId, paidFromName: account?.name || "Unknown", paidDate: today() } : p
+              ),
+            }
+          : c
+      );
+      return { ...d, accounts, creditCards };
+    });
+  };
+
+  const addNote = (draft) => update((d) => ({ ...d, notes: [{ ...draft, id: uid() }, ...d.notes] }));
+  const updateNote = (id, field, val) => update((d) => ({ ...d, notes: d.notes.map((n) => (n.id === id ? { ...n, [field]: val } : n)) }));
+  const removeNote = (id) => update((d) => ({ ...d, notes: d.notes.filter((n) => n.id !== id) }));
+
+  const addDebit = (draft) => {
+    const amt = Number(draft.amount) || 0;
+    update((d) => {
+      let accounts = [...d.accounts];
+      let idx = accounts.findIndex((a) => norm(a.name) === norm(CHECKING_NAME));
+      if (idx === -1) {
+        accounts.push({ id: uid(), name: CHECKING_NAME, balance: 0, apy: "" });
+        idx = accounts.length - 1;
+      }
+      accounts[idx] = { ...accounts[idx], balance: (Number(accounts[idx].balance) || 0) - amt };
+      const debitLog = [...d.debitLog, { ...draft, id: uid() }];
+      return { ...d, accounts, debitLog };
+    });
+  };
+  const removeDebit = (id) => {
+    update((d) => {
+      const entry = d.debitLog.find((x) => x.id === id);
+      let accounts = d.accounts;
+      if (entry) {
+        accounts = accounts.map((a) =>
+          norm(a.name) === norm(CHECKING_NAME) ? { ...a, balance: (Number(a.balance) || 0) + (Number(entry.amount) || 0) } : a
+        );
+      }
+      return { ...d, accounts, debitLog: d.debitLog.filter((x) => x.id !== id) };
+    });
+  };
+
+  const addRecurringBill = (draft) => update((d) => ({ ...d, recurringBills: [...d.recurringBills, { ...draft, id: uid(), lastCharged: null }] }));
+  const removeRecurringBill = (id) => update((d) => ({ ...d, recurringBills: d.recurringBills.filter((b) => b.id !== id) }));
+
+  const addBet = (draft) => update((d) => ({ ...d, polymarketBets: [...d.polymarketBets, { ...draft, id: uid() }] }));
+  const updateBet = (id, field, val) => update((d) => ({ ...d, polymarketBets: d.polymarketBets.map((b) => (b.id === id ? { ...b, [field]: val } : b)) }));
+  const removeBet = (id) => update((d) => ({ ...d, polymarketBets: d.polymarketBets.filter((b) => b.id !== id) }));
+  const addPolyTransaction = (draft) => update((d) => ({ ...d, polymarketTransactions: [...d.polymarketTransactions, { ...draft, id: uid() }] }));
+  const removePolyTransaction = (id) => update((d) => ({ ...d, polymarketTransactions: d.polymarketTransactions.filter((t) => t.id !== id) }));
+
+  const tabs = [
+    { id: "overview", label: "Overview" },
+    { id: "accounts", label: "Bank Accounts" },
+    { id: "debit", label: "Debit Spending" },
+    { id: "paychecks", label: "Paycheck Log" },
+    { id: "investments", label: "Investments" },
+    { id: "polymarket", label: "Polymarket" },
+    { id: "creditcards", label: "Credit Cards" },
+    { id: "paidrecords", label: "Paid Records" },
+    { id: "goals", label: "Savings Jars" },
+    { id: "notes", label: "Notes" },
+  ];
+
+  return (
+    <div style={{ minHeight: "100%", background: COLORS.bg, color: COLORS.ink, fontFamily: "Inter, sans-serif" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,500;1,500;1,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+        input:focus, ::selection { outline: none; }
+        input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        input[type=number] { -moz-appearance: textfield; }
+        select { font-family: 'JetBrains Mono', monospace; }
+      `}</style>
+
+      <div style={{ maxWidth: 880, margin: "0 auto", padding: "36px 24px 80px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 30 }}>
+          <div>
+            <div style={{ fontSize: 11, letterSpacing: "0.14em", textTransform: "uppercase", color: COLORS.faint }}>Personal Ledger</div>
+            <div style={{ fontFamily: "'Newsreader', serif", fontStyle: "italic", fontWeight: 600, fontSize: 38, lineHeight: 1.1 }}>Passbook</div>
+          </div>
+          <div style={{ fontSize: 11, color: COLORS.faint, fontFamily: "'JetBrains Mono', monospace" }}>
+            {saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : ""}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 4, marginBottom: 30, borderBottom: `1px solid ${COLORS.rule}`, flexWrap: "wrap" }}>
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              style={{
+                border: "none",
+                background: "none",
+                cursor: "pointer",
+                padding: "10px 4px",
+                marginRight: 22,
+                fontFamily: "Inter, sans-serif",
+                fontSize: 13,
+                fontWeight: 600,
+                color: tab === t.id ? COLORS.ink : COLORS.faint,
+                borderBottom: tab === t.id ? `2px solid ${COLORS.gold}` : "2px solid transparent",
+                marginBottom: -1,
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {tab === "overview" && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 24, marginBottom: 36, background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: 24 }}>
+              <div>
+                <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: COLORS.faint, marginBottom: 6 }}>Net Worth</div>
+                <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 42, fontWeight: 600, marginBottom: 18 }}>{money(netWorth)}</div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  <StatLine label="Free cash in bank" value={money(totalBank)} />
+                  <StatLine label="Investments" value={money(totalStockValue)} sub={data.stocks.length ? pct(totalStockGainPct) : null} subColor={totalStockGain >= 0 ? COLORS.moss : COLORS.rust} />
+                  <StatLine label="In savings jars" value={money(totalGoalsSaved)} />
+                  <StatLine label="Polymarket available to bet" value={money(availableToBet)} valueColor={availableToBet >= 0 ? COLORS.moss : COLORS.rust} />
+                  <div style={{ borderTop: `1px dashed ${COLORS.rule}`, marginTop: 4, paddingTop: 10 }}>
+                    <StatLine label="Weighted avg APY" value={`${weightedApy.toFixed(2)}%`} />
+                    <StatLine label="Projected interest / yr" value={money(projectedAnnualInterest)} />
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {pieData.length > 0 ? (
+                  <div style={{ width: "100%", height: 220 }}>
+                    <div style={{ display: "flex", justifyContent: "center" }}>
+                      <SimplePieChart data={pieData} size={220} />
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "center", gap: 14, flexWrap: "wrap", marginTop: -8 }}>
+                      {pieData.map((d, i) => (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: COLORS.inkSoft }}>
+                          <span style={{ width: 8, height: 8, borderRadius: 2, background: d.color, display: "inline-block" }} />
+                          {d.name}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ color: COLORS.faint, fontSize: 13, textAlign: "center", padding: 20 }}>Add an account or holding to see your breakdown here.</div>
+                )}
+              </div>
+            </div>
+
+            <RuledSection eyebrow="Summer Income" title="Recent Paycheck" right={<AddButton onClick={() => setTab("paychecks")}>Log a paycheck</AddButton>}>
+              {lastPaycheck ? (
+                <div style={{ background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: "18px 20px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
+                    <StatBlock label="Last paycheck" value={money(Number(lastPaycheck.net) || 0)} />
+                    <StatBlock label="Dated" value={lastPaycheck.date} />
+                    <StatBlock label="→ Checking" value={money(lastPaycheck.splitChecking || 0)} color={COLORS.moss} />
+                    <StatBlock label="→ Savings" value={money(lastPaycheck.splitSavings || 0)} color={COLORS.moss} />
+                    <StatBlock label="Avg per check" value={money(avgNetPay)} />
+                  </div>
+                </div>
+              ) : (
+                <EmptyState text="No paychecks logged yet. Head to the Paycheck Log tab to add your first one — it'll auto-split 25/75 into checking and savings." />
+              )}
+            </RuledSection>
+
+            {data.goals.length > 0 && (
+              <RuledSection eyebrow="Progress" title="Goals at a Glance">
+                <div style={{ display: "grid", gap: 14 }}>
+                  {data.goals.map((g) => {
+                    const saved = Number(g.savedAmount) || 0;
+                    const target = Number(g.targetAmount) || 0;
+                    const p = target > 0 ? Math.min(100, (saved / target) * 100) : 0;
+                    return (
+                      <div key={g.id}>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 5 }}>
+                          <span style={{ fontWeight: 600 }}>{g.name || "Untitled goal"}</span>
+                          <span style={{ fontFamily: "'JetBrains Mono', monospace", color: COLORS.inkSoft }}>{money(saved)} / {money(target)}</span>
+                        </div>
+                        <div style={{ height: 8, background: COLORS.rule, borderRadius: 4, overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${p}%`, background: COLORS.gold, borderRadius: 4 }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </RuledSection>
+            )}
+
+            <SoccerScores />
+          </>
+        )}
+
+        {tab === "accounts" && (
+          <RuledSection eyebrow="Where your cash lives" title="Bank Accounts" right={<AddButton onClick={addAccount}>+ Add account</AddButton>}>
+            <div style={{ fontSize: 12, color: COLORS.faint, marginBottom: 18, lineHeight: 1.6 }}>
+              {CHECKING_NAME} and {SAVINGS_NAME} are created automatically the first time you log a paycheck.
+            </div>
+            {data.accounts.length === 0 && <EmptyState text="No accounts yet. Add your checking, savings, or HYSA." />}
+            {data.accounts.map((a) => (
+              <LedgerRow key={a.id} onDelete={() => removeAccount(a.id)}>
+                <Field label="Account name">
+                  <input style={inputStyle} placeholder="e.g. Ally Savings" value={a.name} onChange={(e) => updateAccount(a.id, "name", e.target.value)} />
+                </Field>
+                <Field label="Balance ($)">
+                  <input style={inputStyle} type="number" placeholder="0.00" value={a.balance} onChange={(e) => updateAccount(a.id, "balance", e.target.value)} />
+                </Field>
+                <Field label="APY (%)">
+                  <input style={inputStyle} type="number" placeholder="0.00" value={a.apy} onChange={(e) => updateAccount(a.id, "apy", e.target.value)} />
+                </Field>
+                <Field label="Yearly interest">
+                  <div style={{ ...inputStyle, background: "transparent", border: "none", color: COLORS.moss, fontWeight: 600 }}>
+                    {money((Number(a.balance) || 0) * ((Number(a.apy) || 0) / 100))}
+                  </div>
+                </Field>
+              </LedgerRow>
+            ))}
+            {data.accounts.length > 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 16, fontFamily: "'JetBrains Mono', monospace", fontSize: 14, fontWeight: 600 }}>
+                <span>Total</span>
+                <span>{money(totalBank)}</span>
+              </div>
+            )}
+          </RuledSection>
+        )}
+
+        {tab === "debit" && (
+          <RuledSection eyebrow={`Out of ${CHECKING_NAME}`} title="Debit Spending" right={<AddButton onClick={() => setTab("paidrecords")}>View combined paid records</AddButton>}>
+            <div style={{ fontSize: 12, color: COLORS.faint, marginBottom: 18, lineHeight: 1.6 }}>
+              Every entry deducts straight from {CHECKING_NAME} (currently {money(checkingBalance)}).
+            </div>
+            <DebitForm onSubmit={addDebit} />
+            {debitSorted.length > 0 && (
+              <div style={{ display: "flex", gap: 24, marginBottom: 22, flexWrap: "wrap" }}>
+                <StatBlock label="Total spent" value={money(totalDebitSpend)} color={COLORS.rust} />
+                {debitByCategory.map((c) => (
+                  <StatBlock key={c.category} label={c.category} value={money(c.total)} />
+                ))}
+              </div>
+            )}
+            {debitSorted.length === 0 && <EmptyState text="No debit payments logged yet." />}
+            {debitSorted.map((entry) => (
+              <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${COLORS.rule}`, fontSize: 13 }}>
+                <div>
+                  <span style={{ fontWeight: 600 }}>{entry.description || "Debit payment"}</span>{" "}
+                  <span style={{ color: COLORS.faint }}>· {entry.category} · {entry.date}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: COLORS.rust }}>-{money(Number(entry.amount) || 0)}</span>
+                  <button onClick={() => removeDebit(entry.id)} style={{ background: "none", border: "none", color: COLORS.rust, cursor: "pointer", opacity: 0.7 }}>
+                    <IconTrash />
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            <div style={{ marginTop: 32 }}>
+              <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: COLORS.faint, marginBottom: 10 }}>
+                Recurring bills
+              </div>
+              <RecurringBillForm onSubmit={addRecurringBill} creditCards={data.creditCards} />
+              {data.recurringBills.length === 0 && <EmptyState text="No recurring bills set up. Add one above — it'll charge automatically each month on that day." />}
+              {data.recurringBills.map((b) => {
+                const card = b.destination === "credit" ? data.creditCards.find((c) => c.id === b.cardId) : null;
+                return (
+                  <div key={b.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${COLORS.rule}`, fontSize: 13 }}>
+                    <div>
+                      <span style={{ fontWeight: 600 }}>{b.name}</span>{" "}
+                      <span style={{ color: COLORS.faint }}>
+                        · day {b.day} of month · {b.destination === "credit" ? `card: ${card?.name || "unknown"}` : `debit · ${b.category}`}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{money(Number(b.amount) || 0)}</span>
+                      <button onClick={() => removeRecurringBill(b.id)} style={{ background: "none", border: "none", color: COLORS.rust, cursor: "pointer", opacity: 0.7 }}>
+                        <IconTrash />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </RuledSection>
+        )}
+
+        {tab === "paychecks" && (
+          <RuledSection eyebrow="Every deposit, in order" title="Paycheck Log">
+            <PaycheckForm onSubmit={splitPaycheck} />
+            {data.paychecks.length === 0 && <EmptyState text="No paychecks logged yet." />}
+            {data.paychecks.length > 0 && (
+              <div style={{ display: "flex", gap: 24, marginBottom: 22, flexWrap: "wrap" }}>
+                <StatBlock label="Total logged (net)" value={money(totalNetPay)} />
+                <StatBlock label="Average per check" value={money(avgNetPay)} />
+                <StatBlock label="Avg. withheld" value={`${avgWithholdPct.toFixed(1)}%`} />
+              </div>
+            )}
+            {paychecksSorted.length > 1 && (
+              <div style={{ height: 160, marginBottom: 26, background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: "12px 8px" }}>
+                <SimpleBarChart
+                  data={paychecksSorted.map((p) => ({ date: p.date, net: Number(p.net) || 0 }))}
+                  valueKey="net"
+                  labelKey="date"
+                  height={160}
+                  colorFn={() => COLORS.moss}
+                  tooltipFn={(d) => `${d.date}: ${money(d.net)}`}
+                />
+              </div>
+            )}
+            {data.paychecks
+              .slice()
+              .sort((a, b) => new Date(b.date) - new Date(a.date))
+              .map((p) => (
+                <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: `1px solid ${COLORS.rule}`, fontSize: 13 }}>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{p.date} {p.note && <span style={{ color: COLORS.faint, fontWeight: 400 }}>· {p.note}</span>}</div>
+                    <div style={{ fontSize: 11, color: COLORS.faint, fontFamily: "'JetBrains Mono', monospace" }}>
+                      gross {money(Number(p.gross) || 0)} → net {money(Number(p.net) || 0)} → {CHECKING_NAME} {money(p.splitChecking || 0)}, {SAVINGS_NAME} {money(p.splitSavings || 0)}
+                    </div>
+                  </div>
+                  <button onClick={() => removePaycheck(p.id)} style={{ background: "none", border: "none", color: COLORS.rust, cursor: "pointer", opacity: 0.7 }}>
+                    <IconTrash />
+                  </button>
+                </div>
+              ))}
+          </RuledSection>
+        )}
+
+        {tab === "investments" && (
+          <RuledSection eyebrow="Track your holdings" title="Investments" right={<AddButton onClick={addStock}>+ Add holding</AddButton>}>
+            <div style={{ fontSize: 12, color: COLORS.faint, marginBottom: 18, lineHeight: 1.6 }}>
+              Prices update when you type them in — this page can't pull live market data on its own, so punch in the current price whenever you check it and your gains recalculate instantly.
+            </div>
+            {data.stocks.length === 0 && <EmptyState text="No holdings yet. Add a ticker to start tracking it." />}
+            {stockRows.map((s) => (
+              <LedgerRow key={s.id} onDelete={() => removeStock(s.id)}>
+                <Field label="Ticker">
+                  <input style={{ ...inputStyle, textTransform: "uppercase" }} placeholder="AAPL" value={s.ticker} onChange={(e) => updateStock(s.id, "ticker", e.target.value.toUpperCase())} />
+                </Field>
+                <Field label="Shares">
+                  <input style={inputStyle} type="number" placeholder="0" value={s.shares} onChange={(e) => updateStock(s.id, "shares", e.target.value)} />
+                </Field>
+                <Field label="Avg cost / share">
+                  <input style={inputStyle} type="number" placeholder="0.00" value={s.avgCost} onChange={(e) => updateStock(s.id, "avgCost", e.target.value)} />
+                </Field>
+                <Field label="Current price">
+                  <input style={inputStyle} type="number" placeholder="0.00" value={s.currentPrice} onChange={(e) => updateStock(s.id, "currentPrice", e.target.value)} />
+                </Field>
+                <Field label="Value">
+                  <div style={{ ...inputStyle, background: "transparent", border: "none", fontWeight: 600 }}>{money(s.value)}</div>
+                </Field>
+                <Field label="Gain / loss">
+                  <div style={{ ...inputStyle, background: "transparent", border: "none", fontWeight: 600, color: s.gain >= 0 ? COLORS.moss : COLORS.rust }}>
+                    {money(s.gain)} ({pct(s.gainPct)})
+                  </div>
+                </Field>
+              </LedgerRow>
+            ))}
+            {data.stocks.length > 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 16, fontFamily: "'JetBrains Mono', monospace", fontSize: 14, fontWeight: 600 }}>
+                <span>Total</span>
+                <span style={{ color: totalStockGain >= 0 ? COLORS.moss : COLORS.rust }}>
+                  {money(totalStockValue)} · {money(totalStockGain)} ({pct(totalStockGainPct)})
+                </span>
+              </div>
+            )}
+          </RuledSection>
+        )}
+
+        {tab === "polymarket" && (
+          <RuledSection eyebrow="Prediction market bets" title="Polymarket">
+            <div style={{ fontSize: 12, color: COLORS.faint, marginBottom: 18, lineHeight: 1.6 }}>
+              There's no way for this page to log into your Polymarket account directly or pull live odds — so track each
+              bet manually here and update its value/status as markets move or resolve.
+            </div>
+
+            <TransactionForm onSubmit={addPolyTransaction} />
+            <div style={{ display: "flex", gap: 24, marginBottom: 26, flexWrap: "wrap" }}>
+              <StatBlock label="Deposited" value={money(totalDeposits)} />
+              <StatBlock label="Withdrawn" value={money(totalWithdrawals)} />
+              <StatBlock label="Available to bet" value={money(availableToBet)} color={availableToBet >= 0 ? COLORS.moss : COLORS.rust} />
+            </div>
+
+            <BetForm onSubmit={addBet} />
+            {betRows.length > 0 && (
+              <div style={{ display: "flex", gap: 24, marginBottom: 22, flexWrap: "wrap" }}>
+                <StatBlock label="Total wagered" value={money(totalWagered)} />
+                <StatBlock label="Current value" value={money(totalBetValue)} />
+                <StatBlock label="P/L" value={money(totalBetPnl)} color={totalBetPnl >= 0 ? COLORS.moss : COLORS.rust} />
+                <StatBlock label="Open bets" value={String(openBets.length)} />
+              </div>
+            )}
+            {betRows.length === 0 && <EmptyState text="No bets logged yet." />}
+
+            {(() => {
+              const sorted = betRows.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+              const todayStr = today();
+              const todaysBets = sorted.filter((b) => b.date === todayStr);
+              const pastGroups = {};
+              sorted
+                .filter((b) => b.date !== todayStr)
+                .forEach((b) => {
+                  const key = b.date || "Unknown date";
+                  if (!pastGroups[key]) pastGroups[key] = [];
+                  pastGroups[key].push(b);
+                });
+              const pastDates = Object.keys(pastGroups).sort((a, b) => new Date(b) - new Date(a));
+
+              const renderBetCard = (b) => (
+                <div key={b.id} style={{ background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, marginBottom: 10 }}>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>
+                        {b.market || "Untitled market"}{" "}
+                        <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", color: COLORS.inkSoft, border: `1px solid ${COLORS.rule}`, borderRadius: 3, padding: "1px 5px", marginLeft: 4 }}>
+                          {b.sport || "Other"}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11, color: COLORS.faint }}>
+                        {b.outcome ? `Betting: ${b.outcome} · ` : ""}{b.date} ·{" "}
+                        <span style={{ color: b.outcomeLabel === "Won" ? COLORS.moss : b.outcomeLabel === "Lost" ? COLORS.rust : COLORS.faint, fontWeight: 600 }}>
+                          {b.outcomeLabel}
+                        </span>
+                      </div>
+                    </div>
+                    <button onClick={() => removeBet(b.id)} style={{ background: "none", border: "none", color: COLORS.rust, cursor: "pointer", opacity: 0.7, alignSelf: "start" }}>
+                      <IconTrash />
+                    </button>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 14 }}>
+                    <Field label="Sport">
+                      <select style={{ ...inputStyle, padding: "7px 8px" }} value={b.sport || "Other"} onChange={(e) => updateBet(b.id, "sport", e.target.value)}>
+                        {SPORT_CATEGORIES.map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Wagered ($)">
+                      <input style={inputStyle} type="number" value={b.amountWagered} onChange={(e) => updateBet(b.id, "amountWagered", e.target.value)} />
+                    </Field>
+                    <Field label="Bought at (%)">
+                      <input style={inputStyle} type="number" min="0" max="100" value={b.buyPercent} onChange={(e) => updateBet(b.id, "buyPercent", e.target.value)} />
+                    </Field>
+                    <Field label="Closed at (%)">
+                      <input style={inputStyle} type="number" min="0" max="100" placeholder="still open" value={b.closePercent ?? ""} onChange={(e) => updateBet(b.id, "closePercent", e.target.value)} />
+                    </Field>
+                    <Field label="Shares">
+                      <div style={{ ...inputStyle, background: "transparent", border: "none", fontWeight: 600 }}>{b.shares.toFixed(2)}</div>
+                    </Field>
+                    {b.isClosed && (
+                      <Field label="Actual payout ($, if different)">
+                        <input
+                          style={inputStyle}
+                          type="number"
+                          placeholder={b.calculatedValue.toFixed(2)}
+                          value={b.actualPayout ?? ""}
+                          onChange={(e) => updateBet(b.id, "actualPayout", e.target.value)}
+                        />
+                      </Field>
+                    )}
+                    <Field label="Value / P&L">
+                      <div style={{ ...inputStyle, background: "transparent", border: "none", fontWeight: 600, color: b.pnl >= 0 ? COLORS.moss : COLORS.rust }}>
+                        {money(b.value)} {b.isClosed && `(${money(b.pnl)})`}
+                      </div>
+                    </Field>
+                  </div>
+                  {b.isClosed && b.hasOverride && (
+                    <div style={{ fontSize: 11, color: COLORS.faint, marginTop: 8 }}>
+                      Calculated payout was {money(b.calculatedValue)} — using your entered {money(b.value)} instead (covers Polymarket's fee/cut).
+                    </div>
+                  )}
+                </div>
+              );
+
+              return (
+                <>
+                  {todaysBets.length > 0 && (
+                    <div style={{ marginBottom: 24 }}>
+                      <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: COLORS.faint, marginBottom: 10 }}>
+                        Today · {todayStr}
+                      </div>
+                      {todaysBets.map(renderBetCard)}
+                    </div>
+                  )}
+
+                  {pastDates.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: COLORS.faint, marginBottom: 10 }}>
+                        Past days
+                      </div>
+                      {pastDates.map((dateKey) => {
+                        const bets = pastGroups[dateKey];
+                        const dayPnl = bets.reduce((s, b) => s + b.pnl, 0);
+                        return (
+                          <details key={dateKey} style={{ marginBottom: 10, border: `1px solid ${COLORS.rule}`, borderRadius: 8, background: COLORS.paper, overflow: "hidden" }}>
+                            <summary
+                              style={{
+                                cursor: "pointer",
+                                padding: "12px 16px",
+                                fontFamily: "Inter, sans-serif",
+                                fontSize: 13,
+                                fontWeight: 600,
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                listStyle: "none",
+                              }}
+                            >
+                              <span>{dateKey} <span style={{ color: COLORS.faint, fontWeight: 400 }}>· {bets.length} bet{bets.length > 1 ? "s" : ""}</span></span>
+                              <span style={{ fontFamily: "'JetBrains Mono', monospace", color: dayPnl >= 0 ? COLORS.moss : COLORS.rust }}>{money(dayPnl)}</span>
+                            </summary>
+                            <div style={{ padding: "4px 16px 16px" }}>{bets.map(renderBetCard)}</div>
+                          </details>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+
+            {dailyBetData.length > 0 && (
+              <div style={{ marginTop: 28 }}>
+                <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: COLORS.faint, marginBottom: 10 }}>
+                  Daily wins &amp; losses
+                </div>
+                <div style={{ height: 200, background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: "12px 8px" }}>
+                  <SimpleBarChart
+                    data={dailyBetData}
+                    valueKey="pnl"
+                    labelKey="date"
+                    height={200}
+                    colorFn={(d) => (d.pnl >= 0 ? COLORS.moss : COLORS.rust)}
+                    tooltipFn={(d) => `${d.date}\n` + d.bets.map((b) => `${b.market}: ${money(b.pnl)}`).join("\n")}
+                  />
+                </div>
+                <div style={{ fontSize: 11, color: COLORS.faint, marginTop: 8 }}>
+                  Only settled (won/lost) bets show here — hover a bar to see which markets moved that day. Open bets don't count as wins or losses yet.
+                </div>
+              </div>
+            )}
+
+            {betRows.length > 0 && (
+              <div style={{ marginTop: 32 }}>
+                <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: COLORS.faint, marginBottom: 10 }}>
+                  Where you bet the most
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                  <div style={{ background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: 16 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 12 }}>By sport / category</div>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {sportBreakdown.map((s) => (
+                        <div key={s.sport}>
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}>
+                            <span>{s.sport}</span>
+                            <span style={{ fontFamily: "'JetBrains Mono', monospace", color: COLORS.faint }}>
+                              {s.count} bet{s.count > 1 ? "s" : ""} · {money(s.wagered)}
+                            </span>
+                          </div>
+                          <div style={{ height: 6, background: COLORS.rule, borderRadius: 3, overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${(s.count / maxSportCount) * 100}%`, background: COLORS.moss, borderRadius: 3 }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: 16 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 12 }}>By price bought at</div>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {percentBreakdown.map((b) => (
+                        <div key={b.bucket}>
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}>
+                            <span>{b.bucket}</span>
+                            <span style={{ fontFamily: "'JetBrains Mono', monospace", color: COLORS.faint }}>
+                              {b.count} bet{b.count > 1 ? "s" : ""} · {money(b.wagered)}
+                            </span>
+                          </div>
+                          <div style={{ height: 6, background: COLORS.rule, borderRadius: 3, overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${(b.count / maxBucketCount) * 100}%`, background: COLORS.gold, borderRadius: 3 }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {data.polymarketTransactions.length > 0 && (
+              <div style={{ marginTop: 32 }}>
+                <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: COLORS.faint, marginBottom: 10 }}>
+                  Deposits &amp; withdrawals
+                </div>
+                <div style={{ height: 180, background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: "12px 8px", marginBottom: 14 }}>
+                  <SimpleBarChart
+                    data={dailyTxnData}
+                    valueKey="net"
+                    labelKey="date"
+                    height={180}
+                    colorFn={(d) => (d.net >= 0 ? COLORS.moss : COLORS.rust)}
+                    tooltipFn={(d) => `${d.date}: ${money(d.net)}`}
+                  />
+                </div>
+                <div>
+                  {data.polymarketTransactions
+                    .slice()
+                    .sort((a, b) => new Date(b.date) - new Date(a.date))
+                    .map((t) => (
+                      <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px dashed ${COLORS.rule}`, fontSize: 12 }}>
+                        <span>
+                          {t.type === "deposit" ? "Deposit" : "Withdrawal"} <span style={{ color: COLORS.faint }}>· {t.date}</span>
+                        </span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: t.type === "deposit" ? COLORS.moss : COLORS.rust }}>
+                            {t.type === "deposit" ? "+" : "-"}{money(Number(t.amount) || 0)}
+                          </span>
+                          <button onClick={() => removePolyTransaction(t.id)} style={{ background: "none", border: "none", color: COLORS.rust, cursor: "pointer", opacity: 0.7 }}>
+                            <IconTrash />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+          </RuledSection>
+        )}
+
+        {tab === "creditcards" && (
+          <RuledSection eyebrow="What you owe" title="Credit Cards" right={<AddButton onClick={addCard}>+ Add card</AddButton>}>
+            <div style={{ marginBottom: 14 }}>
+              <PresetButton label="View combined paid records →" onClick={() => setTab("paidrecords")} />
+            </div>
+            {data.creditCards.length === 0 && <EmptyState text="No cards yet. Add a name and limit to get started." />}
+            {ccRows.length > 0 && (
+              <div style={{ display: "flex", gap: 24, marginBottom: 22, flexWrap: "wrap" }}>
+                <StatBlock label="Total owed" value={money(totalCCDebt)} color={COLORS.rust} />
+                <StatBlock label="Overall utilization" value={`${overallUtil.toFixed(0)}%`} color={overallUtil > 30 ? COLORS.rust : COLORS.moss} />
+              </div>
+            )}
+            <div style={{ display: "grid", gap: 16 }}>
+              {ccRows.map((c) => (
+                <div key={c.id} style={{ background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: 16 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, marginBottom: 6 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14 }}>
+                      <Field label="Card name">
+                        <input style={inputStyle} placeholder="e.g. Chase Freedom" value={c.name} onChange={(e) => updateCard(c.id, "name", e.target.value)} />
+                      </Field>
+                      <Field label="Credit limit ($)">
+                        <input style={inputStyle} type="number" placeholder="0.00" value={c.limit} onChange={(e) => updateCard(c.id, "limit", e.target.value)} />
+                      </Field>
+                    </div>
+                    <button onClick={() => removeCard(c.id)} style={{ background: "none", border: "none", color: COLORS.rust, cursor: "pointer", opacity: 0.7, alignSelf: "start" }}>
+                      <IconTrash />
+                    </button>
+                  </div>
+                  <details style={{ marginBottom: 10 }}>
+                    <summary style={{ fontSize: 11, color: COLORS.faint, cursor: "pointer" }}>Optional: APR &amp; minimum payment</summary>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 14, marginTop: 10 }}>
+                      <Field label="APR (%)">
+                        <input style={inputStyle} type="number" placeholder="0.00" value={c.apr} onChange={(e) => updateCard(c.id, "apr", e.target.value)} />
+                      </Field>
+                      <Field label="Min payment ($)">
+                        <input style={inputStyle} type="number" placeholder="0.00" value={c.minPayment} onChange={(e) => updateCard(c.id, "minPayment", e.target.value)} />
+                      </Field>
+                    </div>
+                  </details>
+                  <div style={{ height: 8, background: COLORS.rule, borderRadius: 4, overflow: "hidden", marginBottom: 6 }}>
+                    <div style={{ height: "100%", width: `${Math.min(c.util, 100)}%`, background: c.util > 30 ? COLORS.rust : COLORS.moss, borderRadius: 4 }} />
+                  </div>
+                  <div style={{ fontSize: 11, color: COLORS.faint, marginBottom: 14, fontFamily: "'JetBrains Mono', monospace" }}>
+                    {money(c.balance)} owed of {money(c.limit)} limit ({c.util.toFixed(0)}%)
+                  </div>
+
+                  <PurchaseForm onSubmit={(purchase) => addPurchase(c.id, purchase)} />
+                  <div>
+                    {c.purchases.length === 0 && <div style={{ fontSize: 12, color: COLORS.faint }}>No purchases logged on this card yet.</div>}
+                    {c.purchases
+                      .slice()
+                      .sort((a, b) => new Date(b.date) - new Date(a.date))
+                      .map((p) => (
+                        <PurchaseRow
+                          key={p.id}
+                          purchase={p}
+                          accounts={data.accounts}
+                          onMarkPaid={(accountId) => markPurchasePaid(c.id, p.id, accountId)}
+                          onRemove={() => removePurchase(c.id, p.id)}
+                        />
+                      ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </RuledSection>
+        )}
+
+        {tab === "paidrecords" && (
+          <RuledSection eyebrow="Every payment, one feed" title="Paid Records">
+            <div style={{ fontSize: 12, color: COLORS.faint, marginBottom: 18, lineHeight: 1.6 }}>
+              Combines your debit card spending and paid-off credit card purchases into a single history.
+            </div>
+            {paidRecords.length === 0 && <EmptyState text="Nothing paid yet. Debit payments and paid-off credit card purchases will show up here." />}
+            {paidRecords.length > 0 && (
+              <>
+                <div style={{ display: "flex", gap: 24, marginBottom: 18, flexWrap: "wrap" }}>
+                  <StatBlock label="Total paid" value={money(totalPaid)} />
+                  <StatBlock label="Debit" value={money(totalPaidDebit)} color={COLORS.moss} />
+                  <StatBlock label="Credit card" value={money(totalPaidCredit)} color={COLORS.rust} />
+                </div>
+                <div>
+                  {paidRecords.map((p) => (
+                    <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: `1px solid ${COLORS.rule}`, fontSize: 13 }}>
+                      <div>
+                        <div style={{ fontWeight: 600 }}>
+                          {p.description || "Payment"}{" "}
+                          <span
+                            style={{
+                              fontSize: 10,
+                              textTransform: "uppercase",
+                              letterSpacing: "0.05em",
+                              color: p.type === "credit" ? COLORS.rust : COLORS.moss,
+                              border: `1px solid ${p.type === "credit" ? COLORS.rust : COLORS.moss}`,
+                              borderRadius: 3,
+                              padding: "1px 5px",
+                              marginLeft: 4,
+                            }}
+                          >
+                            {p.type === "credit" ? p.cardName : p.category}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 11, color: COLORS.faint }}>
+                          {p.type === "credit" ? `paid ${p.paidDate} from ${p.paidFromName}` : `debit · ${p.date}`}
+                        </div>
+                      </div>
+                      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>-{money(Number(p.amount) || 0)}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </RuledSection>
+        )}
+
+        {tab === "goals" && (
+          <RuledSection eyebrow="Set money aside" title="Savings Jars" right={<AddButton onClick={addGoal}>+ Add jar</AddButton>}>
+            <div style={{ fontSize: 12, color: COLORS.faint, marginBottom: 18, lineHeight: 1.6 }}>
+              Jars are funded straight out of {SAVINGS_NAME} — moving money into a jar actually reduces your savings balance, so your totals always match what's really liquid.
+            </div>
+            {data.goals.length === 0 && <EmptyState text="No jars yet. Try 'Fall textbooks' or 'Car repair fund'." />}
+            <div style={{ display: "grid", gap: 18 }}>
+              {data.goals.map((g) => {
+                const saved = Number(g.savedAmount) || 0;
+                const target = Number(g.targetAmount) || 0;
+                const p = target > 0 ? Math.min(100, (saved / target) * 100) : 0;
+                return (
+                  <div key={g.id} style={{ background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: 16 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, marginBottom: 12 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 14 }}>
+                        <Field label="Jar name">
+                          <input style={inputStyle} placeholder="e.g. Fall textbooks" value={g.name} onChange={(e) => updateGoal(g.id, "name", e.target.value)} />
+                        </Field>
+                        <Field label="Target ($)">
+                          <input style={inputStyle} type="number" placeholder="0.00" value={g.targetAmount} onChange={(e) => updateGoal(g.id, "targetAmount", e.target.value)} />
+                        </Field>
+                      </div>
+                      <button onClick={() => removeGoal(g.id)} style={{ background: "none", border: "none", color: COLORS.rust, cursor: "pointer", opacity: 0.7, alignSelf: "start" }}>
+                        <IconTrash />
+                      </button>
+                    </div>
+                    <div style={{ height: 10, background: COLORS.rule, borderRadius: 5, overflow: "hidden", marginBottom: 6 }}>
+                      <div style={{ height: "100%", width: `${p}%`, background: COLORS.gold, borderRadius: 5, transition: "width 0.3s" }} />
+                    </div>
+                    <div style={{ fontSize: 11, color: COLORS.faint, marginBottom: 12, fontFamily: "'JetBrains Mono', monospace" }}>
+                      {money(saved)} / {money(target)} · {p.toFixed(0)}% filled {target > saved ? `· ${money(target - saved)} to go` : "· complete"}
+                    </div>
+                    <JarFundControl available={savingsAvailable} onAdd={(amt) => addToJar(g.id, amt)} onWithdraw={(amt) => withdrawFromJar(g.id, amt)} />
+                  </div>
+                );
+              })}
+            </div>
+            {data.goals.length > 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 20, fontFamily: "'JetBrains Mono', monospace", fontSize: 14, fontWeight: 600 }}>
+                <span>Total set aside</span>
+                <span>{money(totalGoalsSaved)} / {money(totalGoalsTarget)}</span>
+              </div>
+            )}
+          </RuledSection>
+        )}
+
+        {tab === "notes" && (
+          <RuledSection eyebrow="Jot things down" title="Notes">
+            <NoteForm onSubmit={addNote} />
+            {data.notes.length === 0 && <EmptyState text="No notes yet. Add one above — useful for reminders, context on a transaction, or anything else worth remembering later." />}
+            <div style={{ display: "grid", gap: 14 }}>
+              {data.notes.map((n) => (
+                <div key={n.id} style={{ background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 8, padding: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                    <input
+                      type="date"
+                      value={n.date}
+                      onChange={(e) => updateNote(n.id, "date", e.target.value)}
+                      style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }}
+                    />
+                    <button onClick={() => removeNote(n.id)} style={{ background: "none", border: "none", color: COLORS.rust, cursor: "pointer", opacity: 0.7 }}>
+                      <IconTrash />
+                    </button>
+                  </div>
+                  <textarea
+                    value={n.content}
+                    onChange={(e) => updateNote(n.id, "content", e.target.value)}
+                    rows={3}
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      border: `1px solid ${COLORS.rule}`,
+                      background: "#fff",
+                      borderRadius: 4,
+                      padding: "8px 10px",
+                      fontFamily: "Inter, sans-serif",
+                      fontSize: 13,
+                      color: COLORS.ink,
+                      resize: "vertical",
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          </RuledSection>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ErrorBanner({ error }) {
+  return (
+    <div style={{ background: "#fdecea", border: "2px solid #A9503A", borderRadius: 8, padding: 20, margin: 20, fontFamily: "monospace", fontSize: 13, color: "#611a15", whiteSpace: "pre-wrap" }}>
+      <strong>Something broke — here's the actual error:</strong>
+      {"\n\n"}
+      {error}
+    </div>
+  );
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error: error.message || String(error) };
+  }
+  render() {
+    if (this.state.error) return <ErrorBanner error={this.state.error} />;
+    return this.props.children;
+  }
+}
+
+window.addEventListener("error", (e) => {
+  const root = document.getElementById("root");
+  if (root && !root.innerHTML) {
+    root.innerHTML = `<div style="background:#fdecea;border:2px solid #A9503A;border-radius:8px;padding:20px;margin:20px;font-family:monospace;font-size:13px;color:#611a15;white-space:pre-wrap;"><strong>Something broke before the app could load:</strong>\n\n${e.message}</div>`;
+  }
+});
+window.addEventListener("unhandledrejection", (e) => {
+  const root = document.getElementById("root");
+  if (root && !root.innerHTML) {
+    root.innerHTML = `<div style="background:#fdecea;border:2px solid #A9503A;border-radius:8px;padding:20px;margin:20px;font-family:monospace;font-size:13px;color:#611a15;white-space:pre-wrap;"><strong>Something broke before the app could load (promise error):</strong>\n\n${e.reason?.message || e.reason}</div>`;
+  }
+});
+
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <ErrorBoundary>
+    <FinanceTracker />
+  </ErrorBoundary>
+);
+document.getElementById("root").setAttribute("data-app-mounted", "true");
+
+</script>
+</body>
+</html>
